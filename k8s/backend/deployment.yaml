@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-app
+  labels:
+    app: backend-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-app
+  template:
+    metadata:
+      labels:
+        app: backend-app
+    spec:
+      containers:
+      - name: tomcat
+        image: BACKEND_IMAGE_PLACEHOLDER
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: app-volume
+          mountPath: /usr/local/tomcat/webapps
+        readinessProbe:
+          httpGet:
+            path: /simple-app
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /simple-app
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+      initContainers:
+      - name: app-setup
+        image: busybox
+        command: ['sh', '-c', 'mkdir -p /app && echo "<!DOCTYPE html><html><body><h1>Backend Service</h1><p>Simple Java Backend on Tomcat</p><p>Timestamp: $(date)</p></body></html>" > /app/index.html']
+        volumeMounts:
+        - name: app-volume
+          mountPath: /app
+      volumes:
+      - name: app-volume
+        emptyDir: {}
