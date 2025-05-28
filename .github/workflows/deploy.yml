@@ -1,0 +1,107 @@
+name: Deploy to AWS ECR and EKS
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  terraform-outputs:
+    runs-on: ubuntu-latest
+    outputs:
+      ecr_backend_uri: ${{ steps.tf-output.outputs.ecr_backend_uri }}
+      ecr_frontend_uri: ${{ steps.tf-output.outputs.ecr_frontend_uri }}
+      cluster_name: ${{ steps.tf-output.outputs.cluster_name }}
+      cluster_endpoint: ${{ steps.tf-output.outputs.cluster_endpoint }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Get Terraform Outputs
+        id: tf-output
+        run: |
+          echo "ecr_backend_uri=$(terraform output -raw ecr_backend_repository_url)" >> $GITHUB_OUTPUT
+          echo "ecr_frontend_uri=$(terraform output -raw ecr_frontend_repository_url)" >> $GITHUB_OUTPUT
+          echo "cluster_name=$(terraform output -raw cluster_id)" >> $GITHUB_OUTPUT
+          echo "cluster_endpoint=$(terraform output -raw cluster_endpoint)" >> $GITHUB_OUTPUT
+
+  build-and-deploy:
+    needs: terraform-outputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ needs.terraform-outputs.outputs.ecr_backend_uri }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd backend
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REPOSITORY:latest
+          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REPOSITORY:latest
+
+      - name: Build and push frontend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ needs.terraform-outputs.outputs.ecr_frontend_uri }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd frontend
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REPOSITORY:latest
+          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REPOSITORY:latest
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ needs.terraform-outputs.outputs.cluster_name }}
+
+      - name: Deploy to EKS
+        env:
+          BACKEND_IMAGE: ${{ needs.terraform-outputs.outputs.ecr_backend_uri }}:${{ github.sha }}
+          FRONTEND_IMAGE: ${{ needs.terraform-outputs.outputs.ecr_frontend_uri }}:${{ github.sha }}
+        run: |
+          # Update deployment manifests with new image URIs
+          sed -i "s|BACKEND_IMAGE_PLACEHOLDER|$BACKEND_IMAGE|g" k8s/backend/deployment.yaml
+          sed -i "s|FRONTEND_IMAGE_PLACEHOLDER|$FRONTEND_IMAGE|g" k8s/frontend/deployment.yaml
+          
+          # Apply manifests
+          kubectl apply -f k8s/
+          
+          # Wait for rollout
+          kubectl rollout status deployment/backend-app
+          kubectl rollout status deployment/frontend-app
