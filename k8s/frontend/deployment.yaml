@@ -14,40 +14,17 @@ spec:
       labels:
         app: frontend-app
     spec:
+      imagePullSecrets:
+      - name: PRIVATE_REGISTRY_SECRET
       containers:
-      - name: nginx
-        image: FRONTEND_IMAGE_PLACEHOLDER
+      - name: frontend
+        image: ${ECR_FRONTEND_URL}:latest
         ports:
         - containerPort: 80
         resources:
           requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
             memory: "128Mi"
             cpu: "100m"
-        volumeMounts:
-        - name: html-volume
-          mountPath: /usr/share/nginx/html
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 80
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 80
-          initialDelaySeconds: 10
-          periodSeconds: 10
-      initContainers:
-      - name: html-setup
-        image: busybox
-        command: ['sh', '-c', 'echo "<!DOCTYPE html><html><head><title>Frontend</title></head><body><h1>Frontend Application</h1><p>Simple Nginx Frontend</p><p>Backend URL: <a href=\"http://backend-service:8080\">Backend Service</a></p></body></html>" > /html/index.html']
-        volumeMounts:
-        - name: html-volume
-          mountPath: /html
-      volumes:
-      - name: html-volume
-        emptyDir: {}
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
