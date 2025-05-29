@@ -39,8 +39,8 @@ jobs:
       - name: Get Terraform Outputs
         id: tf-output
         run: |
-          echo "ecr_backend_uri=$(terraform output -raw ecr_backend_repository_url)" >> $GITHUB_OUTPUT
-          echo "ecr_frontend_uri=$(terraform output -raw ecr_frontend_repository_url)" >> $GITHUB_OUTPUT
+          echo "ecr_backend_uri=$(terraform output -raw backend_repository_url)" >> $GITHUB_OUTPUT
+          echo "ecr_frontend_uri=$(terraform output -raw frontend_repository_url)" >> $GITHUB_OUTPUT
           echo "cluster_name=$(terraform output -raw cluster_id)" >> $GITHUB_OUTPUT
           echo "cluster_endpoint=$(terraform output -raw cluster_endpoint)" >> $GITHUB_OUTPUT
 
@@ -64,26 +64,18 @@ jobs:
 
       - name: Build and push backend image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ needs.terraform-outputs.outputs.ecr_backend_uri }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
           cd backend
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REPOSITORY:latest
-          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          docker build -t $ECR_REPOSITORY:latest .
           docker push $ECR_REPOSITORY:latest
 
       - name: Build and push frontend image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ needs.terraform-outputs.outputs.ecr_frontend_uri }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
           cd frontend
-          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REPOSITORY:latest
-          docker push $ECR_REPOSITORY:$IMAGE_TAG
+          docker build -t $ECR_REPOSITORY:latest .
           docker push $ECR_REPOSITORY:latest
 
       - name: Update kubeconfig
@@ -91,17 +83,7 @@ jobs:
           aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ needs.terraform-outputs.outputs.cluster_name }}
 
       - name: Deploy to EKS
-        env:
-          BACKEND_IMAGE: ${{ needs.terraform-outputs.outputs.ecr_backend_uri }}:${{ github.sha }}
-          FRONTEND_IMAGE: ${{ needs.terraform-outputs.outputs.ecr_frontend_uri }}:${{ github.sha }}
         run: |
-          # Update deployment manifests with new image URIs
-          sed -i "s|BACKEND_IMAGE_PLACEHOLDER|$BACKEND_IMAGE|g" k8s/backend/deployment.yaml
-          sed -i "s|FRONTEND_IMAGE_PLACEHOLDER|$FRONTEND_IMAGE|g" k8s/frontend/deployment.yaml
-          
-          # Apply manifests
           kubectl apply -f k8s/
-          
-          # Wait for rollout
           kubectl rollout status deployment/backend-app
           kubectl rollout status deployment/frontend-app
